@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Web Static Deployment Setup Script
+# Web Static Deployment Setup Script (Debug Version)
 # This script sets up web servers for the deployment of web_static
 
 set -e  # Exit on any error
@@ -115,23 +115,56 @@ if ! sudo grep -q "location /hbnb_static/" /etc/nginx/sites-available/default; t
     # Create a backup of the original configuration
     sudo cp /etc/nginx/sites-available/default /etc/nginx/sites-available/default.backup
     
-    # Use a more reliable method to add the location block
-    # Find the server block and add our location block before the closing brace
+    # Method 1: Try with alias (original approach)
+    echo "Trying alias method..."
     sudo awk '
         /^[[:space:]]*server[[:space:]]*{/ { in_server = 1 }
         in_server && /^[[:space:]]*}[[:space:]]*$/ && !added {
             print "        location /hbnb_static/ {"
             print "                alias /data/web_static/current/;"
             print "                index index.html index.htm;"
+            print "                try_files $uri $uri/ =404;"
             print "        }"
             print ""
             added = 1
         }
         { print }
-    ' /etc/nginx/sites-available/default > /tmp/nginx_config_new
+    ' /etc/nginx/sites-available/default | sudo tee /tmp/nginx_config_new > /dev/null
     
     # Replace the original with the new configuration
     sudo mv /tmp/nginx_config_new /etc/nginx/sites-available/default
+    
+    # Test this configuration
+    if ! sudo nginx -t; then
+        echo "Alias method failed, trying root method..."
+        
+        # Restore backup and try alternative method
+        sudo cp /etc/nginx/sites-available/default.backup /etc/nginx/sites-available/default
+        
+        # Method 2: Try with root directive instead of alias
+        sudo awk '
+            /^[[:space:]]*server[[:space:]]*{/ { in_server = 1 }
+            in_server && /^[[:space:]]*}[[:space:]]*$/ && !added {
+                print "        location /hbnb_static {"
+                print "                root /data/web_static/current;"
+                print "                index index.html index.htm;"
+                print "                try_files $uri $uri/ =404;"
+                print "        }"
+                print ""
+                added = 1
+            }
+            { print }
+        ' /etc/nginx/sites-available/default | sudo tee /tmp/nginx_config_new2 > /dev/null
+        
+        sudo mv /tmp/nginx_config_new2 /etc/nginx/sites-available/default
+        
+        # Test the alternative configuration
+        if ! sudo nginx -t; then
+            echo "Both methods failed, restoring backup..."
+            sudo cp /etc/nginx/sites-available/default.backup /etc/nginx/sites-available/default
+            exit 1
+        fi
+    fi
 else
     echo "hbnb_static location block already exists in Nginx configuration"
 fi
@@ -208,8 +241,23 @@ fi
 echo "Setting proper permissions..."
 sudo chmod -R 755 /data/web_static/
 
-# Display setup summary
+# Debug information
 echo ""
+echo "=== DEBUG INFORMATION ==="
+echo "Directory structure:"
+ls -la /data/web_static/ || true
+echo ""
+echo "Current symlink:"
+ls -la /data/web_static/current || true
+echo ""
+echo "Test file exists:"
+ls -la /data/web_static/current/index.html || true
+echo ""
+echo "Nginx configuration (hbnb_static section):"
+sudo grep -A 5 -B 2 "location.*hbnb_static" /etc/nginx/sites-available/default || echo "No hbnb_static location found"
+echo ""
+
+# Display setup summary
 echo "=================================="
 echo "Web Static Setup Complete!"
 echo "=================================="
