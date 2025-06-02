@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Web Static Deployment Setup Script (Debug Version)
+# Web Static Deployment Setup Script (Simplified)
 # This script sets up web servers for the deployment of web_static
 
 set -e  # Exit on any error
@@ -20,21 +20,8 @@ fi
 
 # Create directory structure
 echo "Creating directory structure..."
-
-# Create /data/ if it doesn't exist
-sudo mkdir -p /data/
-
-# Create /data/web_static/ if it doesn't exist
-sudo mkdir -p /data/web_static/
-
-# Create /data/web_static/releases/ if it doesn't exist
-sudo mkdir -p /data/web_static/releases/
-
-# Create /data/web_static/shared/ if it doesn't exist
-sudo mkdir -p /data/web_static/shared/
-
-# Create /data/web_static/releases/test/ if it doesn't exist
 sudo mkdir -p /data/web_static/releases/test/
+sudo mkdir -p /data/web_static/shared/
 
 # Create fake HTML file for testing
 echo "Creating test HTML file..."
@@ -105,66 +92,36 @@ else
     fi
 fi
 
-# Update Nginx configuration
+# Update Nginx configuration using a simpler approach
 echo "Updating Nginx configuration..."
 
 # Check if the configuration already exists in default site
-if ! sudo grep -q "location /hbnb_static/" /etc/nginx/sites-available/default; then
+if ! sudo grep -q "location /hbnb_static" /etc/nginx/sites-available/default; then
     echo "Adding hbnb_static location block to Nginx configuration..."
     
     # Create a backup of the original configuration
     sudo cp /etc/nginx/sites-available/default /etc/nginx/sites-available/default.backup
     
-    # Method 1: Try with alias (original approach)
-    echo "Trying alias method..."
-    sudo awk '
-        /^[[:space:]]*server[[:space:]]*{/ { in_server = 1 }
-        in_server && /^[[:space:]]*}[[:space:]]*$/ && !added {
-            print "        location /hbnb_static/ {"
-            print "                alias /data/web_static/current/;"
-            print "                index index.html index.htm;"
-            print "                try_files $uri $uri/ =404;"
-            print "        }"
-            print ""
-            added = 1
+    # Create the nginx location block configuration
+    sudo tee /tmp/hbnb_static_location > /dev/null <<'NGINX_CONFIG'
+        location /hbnb_static {
+                alias /data/web_static/current;
+                index index.html index.htm;
         }
-        { print }
-    ' /etc/nginx/sites-available/default | sudo tee /tmp/nginx_config_new > /dev/null
+NGINX_CONFIG
     
-    # Replace the original with the new configuration
-    sudo mv /tmp/nginx_config_new /etc/nginx/sites-available/default
+    # Insert the location block before the last closing brace of the server block
+    # This is a more reliable approach than complex awk
+    sudo sed -i '/server {/,/^}$/ {
+        /^}$/ i\
+        location /hbnb_static {\
+                alias /data/web_static/current;\
+                index index.html index.htm;\
+        }
+    }' /etc/nginx/sites-available/default
     
-    # Test this configuration
-    if ! sudo nginx -t; then
-        echo "Alias method failed, trying root method..."
-        
-        # Restore backup and try alternative method
-        sudo cp /etc/nginx/sites-available/default.backup /etc/nginx/sites-available/default
-        
-        # Method 2: Try with root directive instead of alias
-        sudo awk '
-            /^[[:space:]]*server[[:space:]]*{/ { in_server = 1 }
-            in_server && /^[[:space:]]*}[[:space:]]*$/ && !added {
-                print "        location /hbnb_static {"
-                print "                root /data/web_static/current;"
-                print "                index index.html index.htm;"
-                print "                try_files $uri $uri/ =404;"
-                print "        }"
-                print ""
-                added = 1
-            }
-            { print }
-        ' /etc/nginx/sites-available/default | sudo tee /tmp/nginx_config_new2 > /dev/null
-        
-        sudo mv /tmp/nginx_config_new2 /etc/nginx/sites-available/default
-        
-        # Test the alternative configuration
-        if ! sudo nginx -t; then
-            echo "Both methods failed, restoring backup..."
-            sudo cp /etc/nginx/sites-available/default.backup /etc/nginx/sites-available/default
-            exit 1
-        fi
-    fi
+    # Clean up temp file
+    sudo rm -f /tmp/hbnb_static_location
 else
     echo "hbnb_static location block already exists in Nginx configuration"
 fi
@@ -186,54 +143,16 @@ fi
 echo "Restarting Nginx..."
 if command -v systemctl &> /dev/null; then
     # systemd (Ubuntu 15.04+)
-    if sudo systemctl restart nginx; then
-        echo "Nginx restarted successfully"
-    else
-        echo "Error: Nginx restart failed"
-        exit 1
-    fi
-    
-    # Enable Nginx to start on boot
-    if sudo systemctl enable nginx; then
-        echo "Nginx enabled to start on boot"
-    else
-        echo "Warning: Could not enable Nginx on boot"
-    fi
-    
-    # Verify Nginx is running
-    if sudo systemctl is-active --quiet nginx; then
-        echo "Nginx is running successfully"
-    else
-        echo "Error: Nginx is not running properly"
-        sudo systemctl status nginx --no-pager -l || true
-        exit 1
-    fi
+    sudo systemctl restart nginx
+    sudo systemctl enable nginx
+    echo "Nginx restarted and enabled (systemd)"
 elif command -v service &> /dev/null; then
     # upstart/sysvinit (Ubuntu 14.04 and earlier)
-    if sudo service nginx restart; then
-        echo "Nginx restarted successfully"
-    else
-        echo "Error: Nginx restart failed"
-        exit 1
-    fi
-    
-    # Enable Nginx to start on boot (Ubuntu 14.04 style)
-    if sudo update-rc.d nginx enable &>/dev/null; then
-        echo "Nginx enabled to start on boot"
-    else
-        echo "Warning: Could not enable Nginx on boot, but it may already be enabled"
-    fi
-    
-    # Verify Nginx is running
-    if sudo service nginx status | grep -q "running"; then
-        echo "Nginx is running successfully"
-    else
-        echo "Error: Nginx is not running properly"
-        sudo service nginx status || true
-        exit 1
-    fi
+    sudo service nginx restart
+    sudo update-rc.d nginx enable &>/dev/null || true
+    echo "Nginx restarted and enabled (upstart/sysvinit)"
 else
-    echo "Error: Could not determine how to restart Nginx (no systemctl or service command found)"
+    echo "Error: Could not determine how to restart Nginx"
     exit 1
 fi
 
@@ -241,20 +160,20 @@ fi
 echo "Setting proper permissions..."
 sudo chmod -R 755 /data/web_static/
 
-# Debug information
+# Verify the setup
 echo ""
-echo "=== DEBUG INFORMATION ==="
+echo "=== VERIFICATION ==="
 echo "Directory structure:"
-ls -la /data/web_static/ || true
+ls -la /data/web_static/ 2>/dev/null || echo "Could not list directory"
 echo ""
-echo "Current symlink:"
-ls -la /data/web_static/current || true
+echo "Symbolic link:"
+ls -la /data/web_static/current 2>/dev/null || echo "Could not check symbolic link"
 echo ""
-echo "Test file exists:"
-ls -la /data/web_static/current/index.html || true
+echo "Test file:"
+ls -la /data/web_static/current/index.html 2>/dev/null || echo "Could not find test file"
 echo ""
-echo "Nginx configuration (hbnb_static section):"
-sudo grep -A 5 -B 2 "location.*hbnb_static" /etc/nginx/sites-available/default || echo "No hbnb_static location found"
+echo "Nginx hbnb_static configuration:"
+sudo grep -A 3 -B 1 "location.*hbnb_static" /etc/nginx/sites-available/default || echo "No hbnb_static configuration found"
 echo ""
 
 # Display setup summary
@@ -262,17 +181,15 @@ echo "=================================="
 echo "Web Static Setup Complete!"
 echo "=================================="
 echo "✓ Nginx installed and configured"
-echo "✓ Directory structure created:"
-echo "    /data/web_static/releases/test/"
-echo "    /data/web_static/shared/"
-echo "    /data/web_static/current/ -> /data/web_static/releases/test/"
+echo "✓ Directory structure created"
 echo "✓ Test HTML file created"
+echo "✓ Symbolic link created"
 echo "✓ Nginx configuration updated"
-echo "✓ Nginx restarted and running"
+echo "✓ Nginx restarted"
 echo ""
-echo "You can test the deployment by visiting:"
+echo "Test URLs:"
+echo "  http://localhost/hbnb_static"
 echo "  http://localhost/hbnb_static/"
-echo "  http://your-server-ip/hbnb_static/"
 echo ""
 
 exit 0
