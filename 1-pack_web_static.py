@@ -3,7 +3,7 @@
 Fabric script for creating .tgz archives from web_static folder
 """
 
-from fabric.api import local
+from fabric.api import local, quiet
 from datetime import datetime
 import os
 
@@ -22,8 +22,7 @@ def do_pack():
     """
     try:
         # Create versions directory if it doesn't exist
-        if not os.path.exists("versions"):
-            local("mkdir -p versions")
+        local("mkdir -p versions")
         
         # Generate timestamp for unique archive name
         now = datetime.now()
@@ -33,26 +32,23 @@ def do_pack():
         
         # Check if web_static folder exists
         if not os.path.exists("web_static"):
-            print("Error: web_static folder does not exist")
             return None
         
         # Create the tar.gz archive containing all web_static files
         print("Packing web_static to {}".format(archive_path))
-        result = local("tar -cvzf {} web_static".format(archive_path),
-                      capture=True)
+        with quiet():
+            result = local("tar -cvzf {} web_static".format(archive_path))
         
         # Check if archive was created successfully
-        if os.path.exists(archive_path):
+        if os.path.exists(archive_path) and os.path.getsize(archive_path) > 0:
             file_size = os.path.getsize(archive_path)
             print("web_static packed: {} -> {}Bytes".format(
                 archive_path, file_size))
             return archive_path
         else:
-            print("Error: Archive was not created")
             return None
             
-    except Exception as e:
-        print("Error during packing: {}".format(e))
+    except Exception:
         return None
 
 
