@@ -45,7 +45,13 @@ sudo tee /data/web_static/releases/test/index.html > /dev/null <<EOF
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Web Static Test Page</title>
-   
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .status { background-color: #d4edda; padding: 10px; border-radius: 5px; margin: 20px 0; }
+        ul { margin: 20px 0; }
+        li { margin: 5px 0; }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -92,7 +98,7 @@ else
         sudo chown -R www-data:www-data /data/
     elif [ -n "$SUDO_USER" ] && id "$SUDO_USER" &>/dev/null; then
         echo "Using sudo user ($SUDO_USER) for ownership"
-        sudo chown -R $SUDO_USER:$SUDO_USER /data/
+        sudo chown -R "$SUDO_USER:$SUDO_USER" /data/
     else
         echo "Warning: No suitable user found, keeping root ownership"
         echo "You may need to manually set ownership later"
@@ -109,62 +115,98 @@ if ! sudo grep -q "location /hbnb_static/" /etc/nginx/sites-available/default; t
     # Create a backup of the original configuration
     sudo cp /etc/nginx/sites-available/default /etc/nginx/sites-available/default.backup
     
-    # Create the new configuration content
-    sudo tee /tmp/hbnb_static_config > /dev/null <<'EOF'
-	location /hbnb_static/ {
-		alias /data/web_static/current/;
-		index index.html index.htm;
-	}
-EOF
+    # Use a more reliable method to add the location block
+    # Find the server block and add our location block before the closing brace
+    sudo awk '
+        /^[[:space:]]*server[[:space:]]*{/ { in_server = 1 }
+        in_server && /^[[:space:]]*}[[:space:]]*$/ && !added {
+            print "        location /hbnb_static/ {"
+            print "                alias /data/web_static/current/;"
+            print "                index index.html index.htm;"
+            print "        }"
+            print ""
+            added = 1
+        }
+        { print }
+    ' /etc/nginx/sites-available/default > /tmp/nginx_config_new
     
-    # Add the location block to the server block
-    sudo sed -i '/server {/,/}/ { /}/i\
-	location /hbnb_static/ {\
-		alias /data/web_static/current/;\
-		index index.html index.htm;\
-	}
-    }' /etc/nginx/sites-available/default
-    
-    # Clean up temporary file
-    sudo rm -f /tmp/hbnb_static_config
+    # Replace the original with the new configuration
+    sudo mv /tmp/nginx_config_new /etc/nginx/sites-available/default
 else
     echo "hbnb_static location block already exists in Nginx configuration"
 fi
 
 # Test Nginx configuration
 echo "Testing Nginx configuration..."
-if ! sudo nginx -t; then
+if sudo nginx -t; then
+    echo "Nginx configuration test passed"
+else
     echo "Nginx configuration test failed. Restoring backup..."
     if [ -f /etc/nginx/sites-available/default.backup ]; then
         sudo cp /etc/nginx/sites-available/default.backup /etc/nginx/sites-available/default
+        echo "Backup restored. Please check the configuration manually."
     fi
-    # Don't exit with error, just log the issue and continue
-    echo "Warning: Nginx configuration may have issues, but continuing with setup"
+    exit 1
 fi
 
-# Restart Nginx to apply changes
+# Detect init system and restart Nginx accordingly
 echo "Restarting Nginx..."
-if sudo systemctl restart nginx; then
-    echo "Nginx restarted successfully"
+if command -v systemctl &> /dev/null; then
+    # systemd (Ubuntu 15.04+)
+    if sudo systemctl restart nginx; then
+        echo "Nginx restarted successfully"
+    else
+        echo "Error: Nginx restart failed"
+        exit 1
+    fi
+    
+    # Enable Nginx to start on boot
+    if sudo systemctl enable nginx; then
+        echo "Nginx enabled to start on boot"
+    else
+        echo "Warning: Could not enable Nginx on boot"
+    fi
+    
+    # Verify Nginx is running
+    if sudo systemctl is-active --quiet nginx; then
+        echo "Nginx is running successfully"
+    else
+        echo "Error: Nginx is not running properly"
+        sudo systemctl status nginx --no-pager -l || true
+        exit 1
+    fi
+elif command -v service &> /dev/null; then
+    # upstart/sysvinit (Ubuntu 14.04 and earlier)
+    if sudo service nginx restart; then
+        echo "Nginx restarted successfully"
+    else
+        echo "Error: Nginx restart failed"
+        exit 1
+    fi
+    
+    # Enable Nginx to start on boot (Ubuntu 14.04 style)
+    if sudo update-rc.d nginx enable &>/dev/null; then
+        echo "Nginx enabled to start on boot"
+    else
+        echo "Warning: Could not enable Nginx on boot, but it may already be enabled"
+    fi
+    
+    # Verify Nginx is running
+    if sudo service nginx status | grep -q "running"; then
+        echo "Nginx is running successfully"
+    else
+        echo "Error: Nginx is not running properly"
+        sudo service nginx status || true
+        exit 1
+    fi
 else
-    echo "Warning: Nginx restart may have failed, but continuing"
+    echo "Error: Could not determine how to restart Nginx (no systemctl or service command found)"
+    exit 1
 fi
 
-# Enable Nginx to start on boot
-if sudo systemctl enable nginx; then
-    echo "Nginx enabled to start on boot"
-else
-    echo "Warning: Could not enable Nginx on boot, but continuing"
-fi
-
-# Verify Nginx is running (but don't fail if it's not)
-if sudo systemctl is-active --quiet nginx; then
-    echo "Nginx is running successfully"
-else
-    echo "Warning: Nginx may not be running properly"
-    # Just show status but don't exit
-    sudo systemctl status nginx --no-pager -l || true
-fi
+# Set proper permissions for web directory
+echo "Setting proper permissions..."
+sudo chmod -R 755 /data/web_static/
 
 # Display setup summary
 echo ""
@@ -173,4 +215,16 @@ echo "Web Static Setup Complete!"
 echo "=================================="
 echo "✓ Nginx installed and configured"
 echo "✓ Directory structure created:"
+echo "    /data/web_static/releases/test/"
+echo "    /data/web_static/shared/"
+echo "    /data/web_static/current/ -> /data/web_static/releases/test/"
+echo "✓ Test HTML file created"
+echo "✓ Nginx configuration updated"
+echo "✓ Nginx restarted and running"
+echo ""
+echo "You can test the deployment by visiting:"
+echo "  http://localhost/hbnb_static/"
+echo "  http://your-server-ip/hbnb_static/"
+echo ""
+
 exit 0
