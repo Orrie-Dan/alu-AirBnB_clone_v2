@@ -1,6 +1,15 @@
 #!/usr/bin/python3
 """
-Fabric script for creating .tgz archives from web_static fold
+Fabric script for creating .tgz archives from web_static folder
+"""
+
+from fabric.api import local
+from datetime import datetime
+import os
+
+
+def do_pack():
+    """
     Generates a .tgz archive from the contents of the web_static folder.
 
     All files in the web_static folder are added to the final archive.
@@ -10,15 +19,7 @@ Fabric script for creating .tgz archives from web_static fold
     Returns:
         str: Archive path if the archive has been correctly generated
         None: If the archive generation fails
-  
-"""
-
-from fabric.api import local
-from datetime import datetime
-import os
-
-
-def do_pack():
+    """
     try:
         # Create versions directory if it doesn't exist
         if not os.path.exists("versions"):
